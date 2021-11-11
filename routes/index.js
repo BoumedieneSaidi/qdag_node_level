@@ -2,26 +2,17 @@ var express = require('express');
 var router = express.Router();
 var userSession;
 
-/* GET home page. To remove after*/
-router.get('/', function(req, res, next) {
-  res.render('index', { title: 'Express' });
-});
-
-/***************************** Utils ***************************/
 function getRandomArbitrary(min, max) {
   return Math.random() * (max - min) + min;
 }
-/** Get user Session queries With Results return "['query1','query2' ...]" */
-function init(req){
+function initSessionVariables(req){
   if(userSession === undefined){
     userSession = req.session;
-    userSession["recentRdfQueries"] = new Map();
-    userSession["recentQDAGQueries"] = new Map();
-    userSession["recentRequests"] = new Set();
-    //That would store all the recent queries with their results
-    userSession["queriesWithResults"] = new Set();
-    //the key index of the query
-    userSession["nextQueryIndex"] = 1;
+    userSession["queryParamsGroups"] = new Set(["DB + Query"]);
+    userSession["history"] = new Map();
+    userSession["queriesSeries"] = new Map();
+    userSession["rDF3XSeries"] = new Map();
+    userSession["isRDFExecuted"] = false;
   }
 }
 function setResultParameters(initialQueryConfig,exectTime,nbrResult,result){
@@ -29,74 +20,104 @@ function setResultParameters(initialQueryConfig,exectTime,nbrResult,result){
     initialQueryConfig["nbrResult"] = nbrResult;
     initialQueryConfig["result"] = result; 
 }
-function executeQDAGQuery(initialQueryConfig){
-  const qdagParameters = JSON.stringify({currentDB:initialQueryConfig["currentDB"],query:initialQueryConfig["query"],
-                        optimizer:initialQueryConfig["optimizer"],isElag:initialQueryConfig["isElag"],isSpatial:initialQueryConfig["isSpatial"],
-                        spatialStrategy:initialQueryConfig["spatialStrategy"]});
-  if(userSession["recentQDAGQueries"].has(qdagParameters)){
-    console.log("After 3amora",userSession["recentQDAGQueries"].get(qdagParameters));
-      const result = userSession["recentQDAGQueries"].get(qdagParameters);
-      setResultParameters(initialQueryConfig,result["execTimeQDAG"],result["nbrResult"], result["result"]);
-  } else {
-      setResultParameters(initialQueryConfig,getRandomArbitrary(1000,5000),4000,"<mancity>\n</pogba>");
-      userSession["recentQDAGQueries"].set(qdagParameters,{execTimeQDAG:initialQueryConfig["execTimeQDAG"],nbrResult:initialQueryConfig["nbrResult"],
-                                                                result:initialQueryConfig["result"]});
-      console.log("After store",userSession["recentQDAGQueries"]);
+
+
+/*********************** Les fonction de formattage des variables de l'utilisateur ********************************/
+function formatQueryGroup(queryParams){
+  const spatStrategy = queryParams["isSpatial"] === "true" ? ',' + queryParams["spatialStrategy"]:'';    
+  const withElag = queryParams["isElag"] === "true" ? ', With Pruning':"";     
+  return queryParams["optimizer"] + withElag + spatStrategy;
+}
+function formatSeriesExecutions(array){
+   const execAGconfig = {}; 
+   array.forEach(str => {
+     const obj = JSON.parse(str);
+     execAGconfig[formatQueryGroup(obj)] = obj;
+    });
+    return execAGconfig;
+}
+function formatQueriesSeries(){
+    let formatedQueriesSeriesMap = {};
+    userSession["queriesSeries"].forEach((seriesExecutions,serieId) => {
+       formatedQueriesSeriesMap[serieId] = formatSeriesExecutions(seriesExecutions);
+    });
+    return formatedQueriesSeriesMap;
+}
+function formatRDFXSeries(){
+    let formatedRDFXSeries = {};
+    userSession["rDF3XSeries"].forEach((execTime,serieId) => formatedRDFXSeries[serieId] = execTime);
+    return formatedRDFXSeries;
+}
+function formatQueryParamsGroups(){
+  let formatedQueryParamsGroups = [...userSession["queryParamsGroups"]];
+  console.log("hipaa",formatedQueryParamsGroups);
+  if(userSession["isRDFExecuted"])
+      formatedQueryParamsGroups.push("RDF-3X");
+  return formatedQueryParamsGroups;
+}
+
+/****************************************************************************************************************/
+
+
+function executeQDAG(queryParams){
+  let serieId = queryParams['currentDB'] + ',' + queryParams["queryName"]; 
+  setResultParameters(queryParams,getRandomArbitrary(1000,5000),4000,"<mancity>\n</pogba>");
+  if(userSession["queriesSeries"].has(serieId))
+      userSession["queriesSeries"].get(serieId).push(JSON.stringify(queryParams));
+  else 
+      userSession["queriesSeries"].set(serieId,[JSON.stringify(queryParams)]);
+  userSession["queryParamsGroups"].add(formatQueryGroup(queryParams));
+  return queryParams;
+}
+function executeRDF(queryParams,rdfToo){
+  let serieId = queryParams['currentDB'] + ',' + queryParams["queryName"]; 
+  if(!userSession["rDF3XSeries"].has(serieId) && rdfToo === "true"){
+      userSession["isRDFExecuted"] = true;
+      userSession["rDF3XSeries"].set(serieId,getRandomArbitrary(1000,5000));
   }
 }
-function executeRDFQuery(initialQueryConfig){
-  const rdfParameters = JSON.stringify({currentDB:initialQueryConfig["currentDB"],query:initialQueryConfig["query"]});
-  //check if rdf3x [currentDb,query] has been already executed
-  if(userSession["recentRdfQueries"].has(rdfParameters))
-      initialQueryConfig["execTimeRDF"] = userSession["recentRdfQueries"].get(rdfParameters);
-  else {
-      initialQueryConfig["execTimeRDF"] = getRandomArbitrary(1000,5000);
-      userSession["recentRdfQueries"].set(rdfParameters,initialQueryConfig["execTimeRDF"]);
+function fetchQuerySpecificParams(queryParamsObj,paramsArr){
+    let specificQueryParamsObj = {};
+    for(let i = 1;i < paramsArr.length; i++)
+        specificQueryParamsObj[paramsArr[i]] = queryParamsObj[paramsArr[i]];
+    return JSON.stringify(specificQueryParamsObj);
+}
+function runQuery(queryParams,rdfToo){
+  let serieId = queryParams['currentDB'] + ',' + queryParams["queryName"]; 
+  const strQuery = fetchQuerySpecificParams(queryParams,["currentDB", "query","optimizer","isElag","isSpatial","spatialStrategy","queryName"]);
+  if(userSession['history'].has(serieId)){
+      let lastExecutions = userSession['history'].get(serieId);
+      if(!lastExecutions.includes(strQuery)){
+        lastExecutions.push(strQuery);
+        executeQDAG(queryParams);
+        executeRDF(queryParams,rdfToo)
+      }else{
+         executeRDF(queryParams,rdfToo)
+         return formatQueriesSeries()[serieId][formatQueryGroup(queryParams)];
+      }
+  }else {
+      userSession['history'].set(serieId,[strQuery]);
+      executeQDAG(queryParams);
   }
+  executeRDF(queryParams,rdfToo)
+  return queryParams;
 }
-//Parse the queriesWith results string map to object array of queries
-function parseQueriesWithResults(){
-    return [...userSession["queriesWithResults"]].map((stringObject) => JSON.parse(stringObject))
-}
-function hasHTTPRequested(strQuery){
-  return userSession["recentRequests"].has(strQuery);
-}
-function addStrQueryToRecentRequests(initialQueryConfig, strQuery){
-  userSession["recentRequests"].add(strQuery);
-  initialQueryConfig["key"] = userSession["nextQueryIndex"];
-  userSession["nextQueryIndex"] += 1;
-}
-function fetchResult(initialQueryConfig){
-  //1- first step : execute QDAG Query
-  executeQDAGQuery(initialQueryConfig);
-  //2- second step: execute RDF-3X QUERY
-  if(initialQueryConfig['rdfToo'] === "true")
-        executeRDFQuery(initialQueryConfig);
-  // update user Queries
-  userSession["queriesWithResults"].add(JSON.stringify(initialQueryConfig));
-}
-/************************************************************************/
+
 /************************************ Routes  ***************************/
 router.get('/demo', function(req, res, next) {
-  init(req);
-  res.send({"queriesWithResults": parseQueriesWithResults()});
+  initSessionVariables(req);
+  res.send({"queriesSeries": formatQueriesSeries(),"rDF3XSeries":formatRDFXSeries(),"queryParamsGroups":formatQueryParamsGroups(),
+  isRDFExecuted:userSession["isRDFExecuted"]});
 });
 /** Run Query generate with a fixed result (waiting to add QDAG) */
 router.get('/run-query', function(req, res, next) {
-  init(req);
-  //Get the query parameters from the http request
-  let initialQueryConfig = req.query;
-  const strQuery = JSON.stringify(initialQueryConfig);
   //if the request has been already sent => it's been already in the bar chart
-  if(hasHTTPRequested(strQuery)){
-      console.log("Hihiiiiiiiiiiii");
-      res.send({  "userQuery":{}  });
-  }
-  else {
-      addStrQueryToRecentRequests(initialQueryConfig,strQuery);
-      fetchResult(initialQueryConfig);
-      res.send({ "userQuery":initialQueryConfig });
-  }
+  const {currentDB,query,optimizer,isElag,isSpatial,spatialStrategy,queryName} = req.query;
+  const qdagParams = {currentDB:currentDB, query:query,optimizer:optimizer,isElag:isElag,isSpatial:isSpatial
+    ,spatialStrategy:spatialStrategy,queryName:queryName};
+  let executedQuery = runQuery(qdagParams,req.query["rdfToo"]);
+  res.send({"queriesSeries": formatQueriesSeries(),"rDF3XSeries":formatRDFXSeries(),"queryParamsGroups":formatQueryParamsGroups(),
+  currentQuery:executedQuery,isRDFExecuted:userSession["isRDFExecuted"]});
 });
 /************************************************************************** */
 
