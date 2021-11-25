@@ -1,3 +1,4 @@
+const { response } = require("express");
 var express = require("express");
 var router = express.Router();
 //la session de l'utilisateur
@@ -102,12 +103,22 @@ async function executeQDAG(queryParams, sessionID) {
     return {};
   }
   //Executer la requete tout en intégrant les résultats aux queries_series
-  console.log("Exec Time khayi", response["execTime"]);
+  console.log(
+    "Haboouuuuuuuuuuuuuka",
+    response["finalResult"]
+      .split("\n")
+      .map((str, i) => ({ no: i, mapping: str }))
+  );
+  queryParams["nbrRes"] = response["nbrRes"];
   setResultParameters(
     queryParams,
     parseInt(response["execTime"]),
     getRandomArbitrary(1000, 5000),
-    response["finalResult"]
+    response["finalResult"].length == 0
+      ? []
+      : response["finalResult"]
+          .split("\n")
+          .map((str, i) => ({ no: i, mapping: str }))
   );
   if (userSession["queriesSeries"].has(serieId))
     userSession["queriesSeries"].get(serieId).push(JSON.stringify(queryParams));
@@ -243,6 +254,45 @@ router.get("/run-query", async function (req, res, next) {
     currentQuery: executedQuery,
     isRDFExecuted: userSession["isRDFExecuted"],
   });
+});
+router.get("/fetchData", async function (req, res, next) {
+  resultFile =
+    userSession["idSess"] +
+    ";" +
+    req.query["currQuery"] +
+    ";" +
+    req.query["currDb"];
+  console.log(
+    "9orrrrrrrrrrrrrrrrr:",
+    "http://localhost:8080/fetch-data?page=" +
+      req.query["page"] +
+      "&perPage" +
+      req.query["per_page"] +
+      "&resultFile=" +
+      resultFile
+  );
+  const response = await fetch(
+    "http://localhost:8080/fetch-data?page=" +
+      req.query["page"] +
+      "&perPage=" +
+      req.query["per_page"] +
+      "&resultFile=" +
+      resultFile
+  );
+  let resp = await response.json();
+  console.log("Leeeeeenght:" + resp["finalResult"].length);
+  if (resp["finalResult"].length === 0)
+    return res.send({
+      data: [],
+    });
+  let data = {
+    data: resp["finalResult"].split("\n").map((str, i) => ({
+      no:
+        i + (parseInt(req.query["page"]) - 1) * parseInt(req.query["per_page"]),
+      mapping: str,
+    })),
+  };
+  return res.send(data);
 });
 /************************************************************************** */
 module.exports = router;
