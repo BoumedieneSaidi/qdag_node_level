@@ -1,28 +1,39 @@
+/************************** Declaration ***************************/
 const { response } = require("express");
 var express = require("express");
+var md5 = require("md5");
 var router = express.Router();
 //la session de l'utilisateur
 var userSession;
-// mod.cjs
+//Importer la fonction fetch pour faire des appels HTTL
 const fetch = (...args) =>
   import("node-fetch").then(({ default: fetch }) => fetch(...args));
+//uuid elle est utilisée pour générér aléatoirement des ids de session
+const { v4: uuidv4 } = require("uuid");
+/********************************************************************/
+
 /************************ Utils functions **********************/
+//générer un temps d'éxecution aléatoire dans l'intrevalle [min,max]
 function getRandomArbitrary(min, max) {
   return Math.random() * (max - min) + min;
 }
-function setResultParameters(initialQueryConfig, exectTime, nbrResult, result) {
-  initialQueryConfig["execTimeQDAG"] = exectTime;
+//Sauvagarder les params des résultats dans l'objet initialQueryConfig
+function setResultParameters(
+  initialQueryConfig,
+  exectTimeQDAG,
+  nbrResult,
+  result
+) {
+  initialQueryConfig["execTimeQDAG"] = exectTimeQDAG;
   initialQueryConfig["nbrResult"] = nbrResult;
   initialQueryConfig["result"] = result;
 }
-/***************************************************************/
 /**
  * @param {*} req la requete de l'utilisateur, comprenant l'ensemble des paramétres
  * Cette fonction initialise les variables de la session utilisateur
  * Cette fonction est solicité à l'affichage de la page demo
  */
 
-const { v4: uuidv4 } = require("uuid");
 function initSessionVariables(req) {
   if (userSession === undefined) {
     userSession = req.session;
@@ -39,11 +50,15 @@ function initSessionVariables(req) {
     userSession["isRDFExecuted"] = false;
   }
 }
+/********************************************************************/
 
 /*********************** Les fonctions de formattage des variables de l'utilisateur ********************************/
 /**
- * @param {*} queryParams les paramétre d'exécution {l'optimiseur, spatial stratégy et le pruning} => un groupe d'execution
- * @returns a string qui représente l'identifiance de ce groupe ou de l'execution de cette requete Optimizer,With or withou pruning,spatialStrategy
+ *
+ * @param {*} queryParams l'objet qui contient l'ensemble des paramétres d'éxecution de la requettes
+ * @returns optimizer,true|false => dépends du paramétre de l'élagage, true|false si la requete est spatiale ou non
+ * La chaine de caractére retournée represente une colonne dans la figure de statistique
+ * cette colonne fait partie d'une série d'éxecution concernant la requete
  */
 function formatQueryGroup(queryParams) {
   const spatStrategy =
@@ -53,16 +68,23 @@ function formatQueryGroup(queryParams) {
   const withElag = queryParams["isElag"] === "true" ? ", With Pruning" : "";
   return queryParams["optimizer"] + withElag + spatStrategy;
 }
-function formatSeriesExecutions(array) {
+
+/**
+ * @param {*} configsArr contient l'ensemble des configuration [optimizer,isElage,IsSpati]
+ * @returns cette fonction fait du mappin du tableau de strings à un autre tableau de string
+ * mais avec un affichage plus adapté dans la figure de stat => Map < ConfigExec => Result>
+ */
+function formatSeriesExecutions(configsArr) {
   const execAGconfig = {};
-  array.forEach((str) => {
+  configsArr.forEach((str) => {
     const obj = JSON.parse(str);
     execAGconfig[formatQueryGroup(obj)] = obj;
   });
   return execAGconfig;
 }
 /**
- * @returns FormatedQueriesSeries Map (DB + Current-key) => {configGroup => (configGroup + result included)}
+ * cette fonction map les séries d'éxecution, de te facon que ca donne
+ * Map<SerieID(CurrenDB+CurrentQuery) => Map<ConfigExec => Result>>
  */
 function formatQueriesSeries() {
   let formatedQueriesSeriesMap = {};
@@ -79,9 +101,13 @@ function formatRDFXSeries() {
   );
   return formatedRDFXSeries;
 }
+/**
+ * userSession["queryParamsGroups"]] contient les différente configuration d'éxecution
+ * @returns formatedQueryParamsGroups les différente configuration d'éxecution, si on a
+ * déja executé RDF-3X on l'ajoute aux paramétre d'execution une et une seule fois
+ */
 function formatQueryParamsGroups() {
   let formatedQueryParamsGroups = [...userSession["queryParamsGroups"]];
-  console.log("hipaa", formatedQueryParamsGroups);
   if (userSession["isRDFExecuted"]) formatedQueryParamsGroups.push("RDF-3X");
   return formatedQueryParamsGroups;
 }
@@ -94,22 +120,35 @@ function formatQueryParamsGroups() {
  */
 async function executeQDAG(queryParams, sessionID) {
   let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
+  let spatStra =
+    queryParams["isSpatial"] === "true"
+      ? ";" + queryParams["spatialStrategy"]
+      : "";
+  let strFileName =
+    sessionID +
+    ";" +
+    queryParams["queryName"] +
+    ";" +
+    queryParams["currentDB"] +
+    ";" +
+    queryParams["optimizer"] +
+    ";" +
+    queryParams["isElag"] +
+    ";" +
+    queryParams["isSpatial"] +
+    spatStra;
+  let hash = md5(strFileName);
   let response = await qdagFetching(
     queryParams["currentDB"],
     queryParams["queryName"],
-    sessionID + ";" + queryParams["queryName"] + ";" + queryParams["currentDB"]
+    hash
   );
   if (Object.keys(response).length === 0) {
     return {};
   }
   //Executer la requete tout en intégrant les résultats aux queries_series
-  console.log(
-    "Haboouuuuuuuuuuuuuka",
-    response["finalResult"]
-      .split("\n")
-      .map((str, i) => ({ no: i, mapping: str }))
-  );
   queryParams["nbrRes"] = response["nbrRes"];
+  queryParams["resultFile"] = hash;
   setResultParameters(
     queryParams,
     parseInt(response["execTime"]),
@@ -127,11 +166,20 @@ async function executeQDAG(queryParams, sessionID) {
   userSession["queryParamsGroups"].add(formatQueryGroup(queryParams));
   return queryParams;
 }
-function executeRDF(queryParams, rdfToo) {
+async function executeRDF(queryParams, rdfToo) {
   let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
   if (!userSession["rDF3XSeries"].has(serieId) && rdfToo === "true") {
+    console.log("Wlllh n executo RDF3X");
+    const response = await fetch(
+      "http://localhost:8080/run-rdf3x?db=" +
+        queryParams["currentDB"] +
+        "&query=" +
+        queryParams["queryName"]
+    );
+    let resp = await response.json();
+    console.log("Ha wehs 3etani rdf 3x", resp);
     userSession["isRDFExecuted"] = true;
-    userSession["rDF3XSeries"].set(serieId, getRandomArbitrary(1000, 5000));
+    userSession["rDF3XSeries"].set(serieId, parseInt(resp["rdfExecTime"]));
   }
 }
 /**
@@ -168,9 +216,9 @@ async function runQuery(queryParams, rdfToo, sessionID) {
     if (!lastExecutions.includes(strQuery)) {
       lastExecutions.push(strQuery);
       await executeQDAG(queryParams, sessionID);
-      executeRDF(queryParams, rdfToo);
+      await executeRDF(queryParams, rdfToo);
     } else {
-      executeRDF(queryParams, rdfToo);
+      await executeRDF(queryParams, rdfToo);
       return formatQueriesSeries()[serieId][formatQueryGroup(queryParams)];
     }
   } else {
@@ -181,7 +229,7 @@ async function runQuery(queryParams, rdfToo, sessionID) {
     userSession["history"].set(serieId, [strQuery]);
   }
 
-  executeRDF(queryParams, rdfToo);
+  await executeRDF(queryParams, rdfToo);
   return queryParams;
 }
 
@@ -197,17 +245,7 @@ router.get("/demo", function (req, res, next) {
     isRDFExecuted: userSession["isRDFExecuted"],
   });
 });
-router.get("/test", async function (req, res, next) {
-  let resp = await qdagFetching(
-    req.query["db"],
-    req.query["queryPath"],
-    req.query["resultFile"]
-  );
-  console.log(resp);
-  return res.send({
-    result: resp,
-  });
-});
+
 async function qdagFetching(db, queryPath, resultFile) {
   const response = await fetch(
     "http://localhost:8080/run-query?db=" +
@@ -255,41 +293,31 @@ router.get("/run-query", async function (req, res, next) {
     isRDFExecuted: userSession["isRDFExecuted"],
   });
 });
+//Get Result Data per Page [Default Page Size = 10]
 router.get("/fetchData", async function (req, res, next) {
-  resultFile =
-    userSession["idSess"] +
-    ";" +
-    req.query["currQuery"] +
-    ";" +
-    req.query["currDb"];
-  console.log(
-    "9orrrrrrrrrrrrrrrrr:",
-    "http://localhost:8080/fetch-data?page=" +
-      req.query["page"] +
-      "&perPage" +
-      req.query["per_page"] +
-      "&resultFile=" +
-      resultFile
-  );
+  //Ou les résultats sont stockées
   const response = await fetch(
     "http://localhost:8080/fetch-data?page=" +
       req.query["page"] +
       "&perPage=" +
       req.query["per_page"] +
       "&resultFile=" +
-      resultFile
+      req.query["resultFile"]
   );
   let resp = await response.json();
-  console.log("Leeeeeenght:" + resp["finalResult"].length);
-  if (resp["finalResult"].length === 0)
+  //Si on en a pas de résultat on retourne un tableau vide
+  let result = resp["finalResult"];
+  if (result.length === 0)
     return res.send({
       data: [],
     });
+  //Sinon on fait un mapping des résultats pour s'adapter au data table <no (1ére colonne du tab, numéro du mapping)
+  //,mapping 2éme colonne du tableau ca représente le mapping lui meme
   let data = {
-    data: resp["finalResult"].split("\n").map((str, i) => ({
+    data: result.split("\n").map((resultStr, i) => ({
       no:
         i + (parseInt(req.query["page"]) - 1) * parseInt(req.query["per_page"]),
-      mapping: str,
+      mapping: resultStr,
     })),
   };
   return res.send(data);
