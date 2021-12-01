@@ -1,4 +1,5 @@
 /************************** Declaration ***************************/
+require("dotenv").config();
 const { response } = require("express");
 var express = require("express");
 var md5 = require("md5");
@@ -119,68 +120,74 @@ function formatQueryParamsGroups() {
  * @returns query params object including results
  */
 async function executeQDAG(queryParams, sessionID) {
-  let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
-  let spatStra =
-    queryParams["isSpatial"] === "true"
-      ? ";" + queryParams["spatialStrategy"]
-      : "";
-  let strFileName =
-    sessionID +
-    ";" +
-    queryParams["queryName"] +
-    ";" +
-    queryParams["currentDB"] +
-    ";" +
-    queryParams["optimizer"] +
-    ";" +
-    queryParams["isElag"] +
-    ";" +
-    queryParams["isSpatial"] +
-    spatStra;
-  let hash = md5(strFileName);
-  let response = await qdagFetching(
-    queryParams["currentDB"],
-    queryParams["queryName"],
-    hash
-  );
-  if (Object.keys(response).length === 0) {
-    return {};
-  }
-  //Executer la requete tout en intégrant les résultats aux queries_series
-  queryParams["nbrRes"] = response["nbrRes"];
-  queryParams["resultFile"] = hash;
-  setResultParameters(
-    queryParams,
-    parseInt(response["execTime"]),
-    getRandomArbitrary(1000, 5000),
-    response["finalResult"].length == 0
-      ? []
-      : response["finalResult"]
-          .split("\n")
-          .map((str, i) => ({ no: i, mapping: str }))
-  );
-  if (userSession["queriesSeries"].has(serieId))
-    userSession["queriesSeries"].get(serieId).push(JSON.stringify(queryParams));
-  else userSession["queriesSeries"].set(serieId, [JSON.stringify(queryParams)]);
-  //ajouter le groupe de paramétre d'éxecution au queryParamsGroups Set
-  userSession["queryParamsGroups"].add(formatQueryGroup(queryParams));
-  return queryParams;
+  try {
+    let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
+    let spatStra =
+      queryParams["isSpatial"] === "true"
+        ? ";" + queryParams["spatialStrategy"]
+        : "";
+    let strFileName =
+      sessionID +
+      ";" +
+      queryParams["queryName"] +
+      ";" +
+      queryParams["currentDB"] +
+      ";" +
+      queryParams["optimizer"] +
+      ";" +
+      queryParams["isElag"] +
+      ";" +
+      queryParams["isSpatial"] +
+      spatStra;
+    let hash = md5(strFileName);
+    let response = await qdagFetching(
+      queryParams["currentDB"],
+      queryParams["queryName"],
+      hash
+    );
+    if (Object.keys(response).length === 0) {
+      return {};
+    }
+    //Executer la requete tout en intégrant les résultats aux queries_series
+    queryParams["nbrRes"] = response["nbrRes"];
+    queryParams["resultFile"] = hash;
+    setResultParameters(
+      queryParams,
+      parseInt(response["execTime"]),
+      getRandomArbitrary(1000, 5000),
+      response["finalResult"].length == 0
+        ? []
+        : response["finalResult"]
+            .split("\n")
+            .map((str, i) => ({ no: i, mapping: str }))
+    );
+    if (userSession["queriesSeries"].has(serieId))
+      userSession["queriesSeries"]
+        .get(serieId)
+        .push(JSON.stringify(queryParams));
+    else
+      userSession["queriesSeries"].set(serieId, [JSON.stringify(queryParams)]);
+    //ajouter le groupe de paramétre d'éxecution au queryParamsGroups Set
+    userSession["queryParamsGroups"].add(formatQueryGroup(queryParams));
+    return queryParams;
+  } catch (err) {}
 }
 async function executeRDF(queryParams, rdfToo) {
-  let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
-  if (!userSession["rDF3XSeries"].has(serieId) && rdfToo === "true") {
-    console.log("Wlllh n executo RDF3X");
-    const response = await fetch(
-      "http://localhost:8080/run-rdf3x?db=" +
-        queryParams["currentDB"] +
-        "&query=" +
-        queryParams["queryName"]
-    );
-    let resp = await response.json();
-    console.log("Ha wehs 3etani rdf 3x", resp);
-    userSession["isRDFExecuted"] = true;
-    userSession["rDF3XSeries"].set(serieId, parseInt(resp["rdfExecTime"]));
-  }
+  try {
+    let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
+    if (!userSession["rDF3XSeries"].has(serieId) && rdfToo === "true") {
+      const response = await fetch(
+        process.env.NODE_APP_API_URL +
+          "/run-rdf3x?db=" +
+          queryParams["currentDB"] +
+          "&query=" +
+          queryParams["queryName"]
+      );
+      let resp = await response.json();
+      userSession["isRDFExecuted"] = true;
+      userSession["rDF3XSeries"].set(serieId, parseInt(resp["rdfExecTime"]));
+    }
+  } catch (err) {}
 }
 /**
  * @param {*} queryParamsObj L'objet contenant l'ensemble des params d'éxécution
@@ -199,45 +206,45 @@ function fetchQuerySpecificParams(queryParamsObj, paramsArr) {
  * @returns un objet comprenant toutes paramétres d'execution + ceux du résultat
  */
 async function runQuery(queryParams, rdfToo, sessionID) {
-  //L'id de la série => on peut dire l'id de la requete {DbName,queryName}
-  let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
-  const strQuery = fetchQuerySpecificParams(queryParams, [
-    "currentDB",
-    "query",
-    "optimizer",
-    "isElag",
-    "isSpatial",
-    "spatialStrategy",
-    "queryName",
-  ]);
-  //tester si on a éxécuté la requete aux moins une fois
-  if (userSession["history"].has(serieId)) {
-    let lastExecutions = userSession["history"].get(serieId);
-    if (!lastExecutions.includes(strQuery)) {
-      lastExecutions.push(strQuery);
-      await executeQDAG(queryParams, sessionID);
-      await executeRDF(queryParams, rdfToo);
+  try {
+    //L'id de la série => on peut dire l'id de la requete {DbName,queryName}
+    let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
+    const strQuery = fetchQuerySpecificParams(queryParams, [
+      "currentDB",
+      "query",
+      "optimizer",
+      "isElag",
+      "isSpatial",
+      "spatialStrategy",
+      "queryName",
+    ]);
+    //tester si on a éxécuté la requete aux moins une fois
+    if (userSession["history"].has(serieId)) {
+      let lastExecutions = userSession["history"].get(serieId);
+      if (!lastExecutions.includes(strQuery)) {
+        lastExecutions.push(strQuery);
+        await executeQDAG(queryParams, sessionID);
+        await executeRDF(queryParams, rdfToo);
+      } else {
+        await executeRDF(queryParams, rdfToo);
+        return formatQueriesSeries()[serieId][formatQueryGroup(queryParams)];
+      }
     } else {
-      await executeRDF(queryParams, rdfToo);
-      return formatQueriesSeries()[serieId][formatQueryGroup(queryParams)];
+      //sinon créer la nouvelle série et éxécuter QDAG
+      let respo = await executeQDAG(queryParams, sessionID);
+      if (Object.keys(respo).length === 0) return {};
+      userSession["history"].set(serieId, [strQuery]);
     }
-  } else {
-    //sinon créer la nouvelle série et éxécuter QDAG
 
-    let respo = await executeQDAG(queryParams, sessionID);
-    if (Object.keys(respo).length === 0) return {};
-    userSession["history"].set(serieId, [strQuery]);
-  }
-
-  await executeRDF(queryParams, rdfToo);
-  return queryParams;
+    await executeRDF(queryParams, rdfToo);
+    return queryParams;
+  } catch (err) {}
 }
 
 /************************************ Routes  ***************************/
 /** À l'affiche de la page demo */
 router.get("/demo", function (req, res, next) {
   initSessionVariables(req);
-  console.log(userSession);
   res.send({
     queriesSeries: formatQueriesSeries(),
     rDF3XSeries: formatRDFXSeries(),
@@ -247,80 +254,88 @@ router.get("/demo", function (req, res, next) {
 });
 
 async function qdagFetching(db, queryPath, resultFile) {
-  const response = await fetch(
-    "http://localhost:8080/run-query?db=" +
-      db +
-      "&queryPath=" +
-      queryPath +
-      "&resultFile=" +
-      resultFile
-  );
-  console.log("Fetchi khoya");
-  return await response.json();
+  try {
+    const response = await fetch(
+      process.env.NODE_APP_API_URL +
+        "/run-query?db=" +
+        db +
+        "&queryPath=" +
+        queryPath +
+        "&resultFile=" +
+        resultFile
+    );
+    return await response.json();
+  } catch (err) {}
 }
 /** À l'éxecution de la requete */
 router.get("/run-query", async function (req, res, next) {
   //Deconstruct la requete en deux chose: 1- Les paramétre d'éxecution de la requete, 2- la possibilité d'éxecuter RDF-3X
-  const {
-    currentDB,
-    query,
-    optimizer,
-    isElag,
-    isSpatial,
-    spatialStrategy,
-    queryName,
-  } = req.query;
-  const queryParams = {
-    currentDB: currentDB,
-    query: query,
-    optimizer: optimizer,
-    isElag: isElag,
-    isSpatial: isSpatial,
-    spatialStrategy: spatialStrategy,
-    queryName: queryName,
-  };
-  //éxecuter la requete, retourner un objet comprenant Les params d'éxecutions initiales + les paramétres de résultat
-  let executedQuery = await runQuery(
-    queryParams,
-    req.query["rdfToo"],
-    userSession["idSess"]
-  );
-  res.send({
-    queriesSeries: formatQueriesSeries(),
-    rDF3XSeries: formatRDFXSeries(),
-    queryParamsGroups: formatQueryParamsGroups(),
-    currentQuery: executedQuery,
-    isRDFExecuted: userSession["isRDFExecuted"],
-  });
+  try {
+    const {
+      currentDB,
+      query,
+      optimizer,
+      isElag,
+      isSpatial,
+      spatialStrategy,
+      queryName,
+    } = req.query;
+    const queryParams = {
+      currentDB: currentDB,
+      query: query,
+      optimizer: optimizer,
+      isElag: isElag,
+      isSpatial: isSpatial,
+      spatialStrategy: spatialStrategy,
+      queryName: queryName,
+    };
+    //éxecuter la requete, retourner un objet comprenant Les params d'éxecutions initiales + les paramétres de résultat
+    let executedQuery = await runQuery(
+      queryParams,
+      req.query["rdfToo"],
+      userSession["idSess"]
+    );
+    res.send({
+      queriesSeries: formatQueriesSeries(),
+      rDF3XSeries: formatRDFXSeries(),
+      queryParamsGroups: formatQueryParamsGroups(),
+      currentQuery: executedQuery,
+      isRDFExecuted: userSession["isRDFExecuted"],
+    });
+  } catch (err) {}
 });
 //Get Result Data per Page [Default Page Size = 10]
 router.get("/fetchData", async function (req, res, next) {
-  //Ou les résultats sont stockées
-  const response = await fetch(
-    "http://localhost:8080/fetch-data?page=" +
-      req.query["page"] +
-      "&perPage=" +
-      req.query["per_page"] +
-      "&resultFile=" +
-      req.query["resultFile"]
-  );
-  let resp = await response.json();
-  //Si on en a pas de résultat on retourne un tableau vide
-  let result = resp["finalResult"];
-  if (result.length === 0)
-    return res.send({
-      data: [],
-    });
-  //Sinon on fait un mapping des résultats pour s'adapter au data table <no (1ére colonne du tab, numéro du mapping)
-  //,mapping 2éme colonne du tableau ca représente le mapping lui meme
-  let data = {
-    data: result.split("\n").map((resultStr, i) => ({
-      no:
-        i + (parseInt(req.query["page"]) - 1) * parseInt(req.query["per_page"]),
-      mapping: resultStr,
-    })),
-  };
-  return res.send(data);
+  try {
+    //Ou les résultats sont stockées
+    const response = await fetch(
+      process.env.NODE_APP_API_URL +
+        "/fetch-data?page=" +
+        req.query["page"] +
+        "&perPage=" +
+        req.query["per_page"] +
+        "&resultFile=" +
+        req.query["resultFile"]
+    );
+    let resp = await response.json();
+    //Si on en a pas de résultat on retourne un tableau vide
+    let result = resp["finalResult"];
+    if (result.length === 0)
+      return res.send({
+        data: [],
+      });
+    //Sinon on fait un mapping des résultats pour s'adapter au data table <no (1ére colonne du tab, numéro du mapping)
+    //,mapping 2éme colonne du tableau ca représente le mapping lui meme
+    let data = {
+      data: result.split("\n").map((resultStr, i) => ({
+        no:
+          i +
+          (parseInt(req.query["page"]) - 1) * parseInt(req.query["per_page"]),
+        mapping: resultStr,
+      })),
+    };
+    return res.send(data);
+  } catch (err) {}
 });
 /************************************************************************** */
 module.exports = router;

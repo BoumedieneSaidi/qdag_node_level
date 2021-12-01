@@ -1,18 +1,16 @@
 # pull official base image
-FROM node:13.12.0-alpine
+FROM node:14-alpine 
 
 # set working directory
 WORKDIR /app
-
-# add `/app/node_modules/.bin` to $PATH
-ENV PATH /app/node_modules/.bin:$PATH
+ENV NODE_ENV production
 
 # install app dependencies
 COPY package.json ./
-RUN npm install --no-audit
+RUN npm install --production
 
 # add app
 COPY . ./
-
+EXPOSE 3005
 # start app
 CMD ["npm", "start"]
