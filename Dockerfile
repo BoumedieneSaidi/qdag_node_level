@@ -7,7 +7,7 @@ ENV NODE_ENV production
 
 # install app dependencies
 COPY package.json ./
-RUN npm install --production
+RUN npm install --production --no-audit
 
 # add app
 COPY . ./
