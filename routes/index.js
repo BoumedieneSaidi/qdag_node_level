@@ -143,7 +143,9 @@ async function executeQDAG(queryParams, sessionID) {
     let response = await qdagFetching(
       queryParams["currentDB"],
       queryParams["queryName"],
-      hash
+      hash,
+      queryParams["optimizer"],
+      queryParams["isElag"]
     );
     if (Object.keys(response).length === 0) {
       return {};
@@ -253,7 +255,7 @@ router.get("/demo", function (req, res, next) {
   });
 });
 
-async function qdagFetching(db, queryPath, resultFile) {
+async function qdagFetching(db, queryPath, resultFile, optimizer, isPrun) {
   try {
     const response = await fetch(
       process.env.NODE_APP_API_URL +
@@ -262,7 +264,11 @@ async function qdagFetching(db, queryPath, resultFile) {
         "&queryPath=" +
         queryPath +
         "&resultFile=" +
-        resultFile
+        resultFile +
+        "&optimizer=" +
+        optimizer +
+        "&isPrun=" +
+        isPrun
     );
     return await response.json();
   } catch (err) {}
