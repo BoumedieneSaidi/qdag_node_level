@@ -1,11 +1,14 @@
 /************************** Declaration ***************************/
 require("dotenv").config();
+const bcrypt = require("bcryptjs");
 const { response } = require("express");
 var express = require("express");
 var md5 = require("md5");
 var router = express.Router();
 //la session de l'utilisateur
 var userSession;
+var hashedPassword =
+  "$2a$08$wMaRPzpH2krYdfqLDiuCPOchhnAxOJCfJ4DjbbLCWaPUE2N4RPwSS";
 //Importer la fonction fetch pour faire des appels HTTL
 const fetch = (...args) =>
   import("node-fetch").then(({ default: fetch }) => fetch(...args));
@@ -18,6 +21,7 @@ const { v4: uuidv4 } = require("uuid");
 function getRandomArbitrary(min, max) {
   return Math.random() * (max - min) + min;
 }
+
 //Sauvagarder les params des résultats dans l'objet initialQueryConfig
 function setResultParameters(
   initialQueryConfig,
@@ -343,5 +347,24 @@ router.get("/fetchData", async function (req, res, next) {
     return res.send(data);
   } catch (err) {}
 });
+router.post("/login", (req, res) => {
+  bcrypt.compare(req.body.password, hashedPassword).then((isEqual) => {
+    if (req.body.username === "admin" && isEqual)
+      res.send({
+        token: "test123",
+      });
+    else
+      res.send({
+        status: "user name or password error",
+      });
+  });
+});
+router.post("/change-spring-url", (req, res) => {
+  process.env.NODE_APP_API_URL = req.body.springUrl;
+  res.send({
+    status: "Spring URL changed successfully",
+  });
+});
+
 /************************************************************************** */
 module.exports = router;
