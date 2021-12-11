@@ -3,11 +3,10 @@ FROM node:14-alpine
 
 # set working directory
 WORKDIR /app
-ENV NODE_ENV production
 
 # install app dependencies
 COPY package.json ./
-RUN npm install --production --no-audit
+RUN npm install  --no-audit
 
 # add app
 COPY . ./
