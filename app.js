@@ -14,10 +14,9 @@ app.set("views", path.join(__dirname, "views"));
 app.set("view engine", "jade");
 app.use(
   session({
-    resave: true,
+    resave: false,
     secret: "123456",
-    saveUninitialized: true,
-    cookie: { maxAge: 1000 * 60 * 3 },
+    saveUninitialized: false,
   })
 );
 app.use(logger("dev"));

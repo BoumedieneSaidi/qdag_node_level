@@ -15,7 +15,15 @@ const fetch = (...args) =>
 //uuid elle est utilisée pour générér aléatoirement des ids de session
 const { v4: uuidv4 } = require("uuid");
 /********************************************************************/
-
+/*var app = express();
+const session = require("express-session");
+app.use(
+  session({
+    resave: false,
+    secret: "123456",
+    saveUninitialized: true,
+  })
+);*/
 /************************ Utils functions **********************/
 //générer un temps d'éxecution aléatoire dans l'intrevalle [min,max]
 function getRandomArbitrary(min, max) {
@@ -40,19 +48,18 @@ function setResultParameters(
  */
 
 function initSessionVariables(req) {
-  if (userSession === undefined) {
-    userSession = req.session;
-    userSession["idSess"] = uuidv4();
+  if (req.session["idSess"] === undefined) {
+    req.session["idSess"] = uuidv4();
     //Ca represente l'ensemble de combinaison des paramétres d'execution
-    userSession["queryParamsGroups"] = new Set(["DB + Query"]); //Une reglé:["DB+Query",.........,"RDF-3X"] suivre cet ordre pour l'affichage
+    req.session["queryParamsGroups"] = ["DB + Query"]; //Une reglé:["DB+Query",.........,"RDF-3X"] suivre cet ordre pour l'affichage
     //Garder une trace sur les différentes éxecutions, pour ne pas les rééxécuté de nouveau
-    userSession["history"] = new Map();
+    req.session["history"] = new Map();
     //Les différentes éxecutions de QDAG {Key:DB+query => Value:[String executions]}
-    userSession["queriesSeries"] = new Map();
+    req.session["queriesSeries"] = new Map();
     //Les différente éxecutions de RDF-3X {Key:DB+Query => Value:Exec Time RDF-3x}
-    userSession["rDF3XSeries"] = new Map();
+    req.session["rDF3XSeries"] = new Map();
     //Est-ce qu'on a éxecuté au moins une fois RDF-3X
-    userSession["isRDFExecuted"] = false;
+    req.session["isRDFExecuted"] = false;
   }
 }
 /********************************************************************/
@@ -91,19 +98,19 @@ function formatSeriesExecutions(configsArr) {
  * cette fonction map les séries d'éxecution, de te facon que ca donne
  * Map<SerieID(CurrenDB+CurrentQuery) => Map<ConfigExec => Result>>
  */
-function formatQueriesSeries() {
+function formatQueriesSeries(req) {
   let formatedQueriesSeriesMap = {};
-  userSession["queriesSeries"].forEach((seriesExecutions, serieId) => {
+  const map = new Map(Object.entries(req.session["queriesSeries"]));
+  map.forEach((seriesExecutions, serieId) => {
     formatedQueriesSeriesMap[serieId] =
       formatSeriesExecutions(seriesExecutions);
   });
   return formatedQueriesSeriesMap;
 }
-function formatRDFXSeries() {
+function formatRDFXSeries(req) {
   let formatedRDFXSeries = {};
-  userSession["rDF3XSeries"].forEach(
-    (execTime, serieId) => (formatedRDFXSeries[serieId] = execTime)
-  );
+  const map = new Map(Object.entries(req.session["rDF3XSeries"]));
+  map.forEach((execTime, serieId) => (formatedRDFXSeries[serieId] = execTime));
   return formatedRDFXSeries;
 }
 /**
@@ -111,9 +118,9 @@ function formatRDFXSeries() {
  * @returns formatedQueryParamsGroups les différente configuration d'éxecution, si on a
  * déja executé RDF-3X on l'ajoute aux paramétre d'execution une et une seule fois
  */
-function formatQueryParamsGroups() {
-  let formatedQueryParamsGroups = [...userSession["queryParamsGroups"]];
-  if (userSession["isRDFExecuted"]) formatedQueryParamsGroups.push("RDF-3X");
+function formatQueryParamsGroups(req) {
+  let formatedQueryParamsGroups = [...req.session["queryParamsGroups"]];
+  if (req.session["isRDFExecuted"]) formatedQueryParamsGroups.push("RDF-3X");
   return formatedQueryParamsGroups;
 }
 
@@ -123,7 +130,7 @@ function formatQueryParamsGroups() {
  * @param {*} queryParams Les paramétres nécessaire à l'éxecution de QDAG
  * @returns query params object including results
  */
-async function executeQDAG(queryParams, sessionID) {
+async function executeQDAG(queryParams, sessionID, req) {
   try {
     let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
     let spatStra =
@@ -167,21 +174,26 @@ async function executeQDAG(queryParams, sessionID) {
             .split("\n")
             .map((str, i) => ({ no: i, mapping: str }))
     );
-    if (userSession["queriesSeries"].has(serieId))
-      userSession["queriesSeries"]
-        .get(serieId)
-        .push(JSON.stringify(queryParams));
-    else
-      userSession["queriesSeries"].set(serieId, [JSON.stringify(queryParams)]);
+    if (req.session["queriesSeries"][serieId] !== undefined)
+      req.session["queriesSeries"][serieId].push(JSON.stringify(queryParams));
+    else req.session["queriesSeries"][serieId] = [JSON.stringify(queryParams)];
     //ajouter le groupe de paramétre d'éxecution au queryParamsGroups Set
-    userSession["queryParamsGroups"].add(formatQueryGroup(queryParams));
+    if (
+      !req.session["queryParamsGroups"].includes(formatQueryGroup(queryParams))
+    ) {
+      req.session["queryParamsGroups"].push(formatQueryGroup(queryParams));
+    }
+
     return queryParams;
   } catch (err) {}
 }
-async function executeRDF(queryParams, rdfToo) {
+async function executeRDF(queryParams, rdfToo, req) {
   try {
     let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
-    if (!userSession["rDF3XSeries"].has(serieId) && rdfToo === "true") {
+    if (
+      req.session["rDF3XSeries"][serieId] === undefined &&
+      rdfToo === "true"
+    ) {
       const response = await fetch(
         process.env.NODE_APP_API_URL +
           "/run-rdf3x?db=" +
@@ -190,8 +202,8 @@ async function executeRDF(queryParams, rdfToo) {
           queryParams["queryName"]
       );
       let resp = await response.json();
-      userSession["isRDFExecuted"] = true;
-      userSession["rDF3XSeries"].set(serieId, parseInt(resp["rdfExecTime"]));
+      req.session["isRDFExecuted"] = true;
+      req.session["rDF3XSeries"][serieId] = parseInt(resp["rdfExecTime"]);
     }
   } catch (err) {}
 }
@@ -211,7 +223,7 @@ function fetchQuerySpecificParams(queryParamsObj, paramsArr) {
  * @param {*} rdfToo si l'utilisateurs veut comparer avec RDF-3X
  * @returns un objet comprenant toutes paramétres d'execution + ceux du résultat
  */
-async function runQuery(queryParams, rdfToo, sessionID) {
+async function runQuery(queryParams, rdfToo, sessionID, req) {
   try {
     //L'id de la série => on peut dire l'id de la requete {DbName,queryName}
     let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
@@ -225,24 +237,26 @@ async function runQuery(queryParams, rdfToo, sessionID) {
       "queryName",
     ]);
     //tester si on a éxécuté la requete aux moins une fois
-    if (userSession["history"].has(serieId)) {
-      let lastExecutions = userSession["history"].get(serieId);
+    if (req.session["history"][serieId] !== undefined) {
+      let lastExecutions = req.session["history"][serieId];
       if (!lastExecutions.includes(strQuery)) {
         lastExecutions.push(strQuery);
-        await executeQDAG(queryParams, sessionID);
-        await executeRDF(queryParams, rdfToo);
+        await executeQDAG(queryParams, sessionID, req);
+        await executeRDF(queryParams, rdfToo, req);
       } else {
-        await executeRDF(queryParams, rdfToo);
-        return formatQueriesSeries()[serieId][formatQueryGroup(queryParams)];
+        await executeRDF(queryParams, rdfToo, req);
+        return formatQueriesSeries(req)[serieId][
+          formatQueryGroup(queryParams, req)
+        ];
       }
     } else {
       //sinon créer la nouvelle série et éxécuter QDAG
-      let respo = await executeQDAG(queryParams, sessionID);
+      let respo = await executeQDAG(queryParams, sessionID, req);
       if (Object.keys(respo).length === 0) return {};
-      userSession["history"].set(serieId, [strQuery]);
+      req.session["history"][serieId] = [strQuery];
     }
 
-    await executeRDF(queryParams, rdfToo);
+    await executeRDF(queryParams, rdfToo, req);
     return queryParams;
   } catch (err) {}
 }
@@ -250,12 +264,17 @@ async function runQuery(queryParams, rdfToo, sessionID) {
 /************************************ Routes  ***************************/
 /** À l'affiche de la page demo */
 router.get("/demo", function (req, res, next) {
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    process.env.NODE_APP_REACT_ORIGIN
+  );
+  res.setHeader("Access-Control-Allow-Credentials", "true");
   initSessionVariables(req);
   res.send({
-    queriesSeries: formatQueriesSeries(),
-    rDF3XSeries: formatRDFXSeries(),
-    queryParamsGroups: formatQueryParamsGroups(),
-    isRDFExecuted: userSession["isRDFExecuted"],
+    queriesSeries: formatQueriesSeries(req),
+    rDF3XSeries: formatRDFXSeries(req),
+    queryParamsGroups: formatQueryParamsGroups(req),
+    isRDFExecuted: req.session["isRDFExecuted"],
   });
 });
 
@@ -279,6 +298,12 @@ async function qdagFetching(db, queryPath, resultFile, optimizer, isPrun) {
 }
 /** À l'éxecution de la requete */
 router.get("/run-query", async function (req, res, next) {
+  initSessionVariables(req);
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    process.env.NODE_APP_REACT_ORIGIN
+  );
+  res.setHeader("Access-Control-Allow-Credentials", "true");
   //Deconstruct la requete en deux chose: 1- Les paramétre d'éxecution de la requete, 2- la possibilité d'éxecuter RDF-3X
   try {
     const {
@@ -303,20 +328,26 @@ router.get("/run-query", async function (req, res, next) {
     let executedQuery = await runQuery(
       queryParams,
       req.query["rdfToo"],
-      userSession["idSess"]
+      req.session["idSess"],
+      req
     );
     res.send({
-      queriesSeries: formatQueriesSeries(),
-      rDF3XSeries: formatRDFXSeries(),
-      queryParamsGroups: formatQueryParamsGroups(),
+      queriesSeries: formatQueriesSeries(req),
+      rDF3XSeries: formatRDFXSeries(req),
+      queryParamsGroups: formatQueryParamsGroups(req),
       currentQuery: executedQuery,
-      isRDFExecuted: userSession["isRDFExecuted"],
+      isRDFExecuted: req.session["isRDFExecuted"],
     });
   } catch (err) {}
 });
 //Get Result Data per Page [Default Page Size = 10]
 router.get("/fetchData", async function (req, res, next) {
   try {
+    res.setHeader(
+      "Access-Control-Allow-Origin",
+      process.env.NODE_APP_REACT_ORIGIN
+    );
+    res.setHeader("Access-Control-Allow-Credentials", "true");
     //Ou les résultats sont stockées
     const response = await fetch(
       process.env.NODE_APP_API_URL +
@@ -348,6 +379,17 @@ router.get("/fetchData", async function (req, res, next) {
   } catch (err) {}
 });
 router.post("/login", (req, res) => {
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    process.env.NODE_APP_REACT_ORIGIN
+  );
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  if (req.body.password === undefined) {
+    res.send({
+      status: "user name or password error",
+    });
+    return;
+  }
   bcrypt.compare(req.body.password, hashedPassword).then((isEqual) => {
     if (req.body.username === "admin" && isEqual)
       res.send({
@@ -360,9 +402,25 @@ router.post("/login", (req, res) => {
   });
 });
 router.post("/change-spring-url", (req, res) => {
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    process.env.NODE_APP_REACT_ORIGIN
+  );
+  res.setHeader("Access-Control-Allow-Credentials", "true");
   process.env.NODE_APP_API_URL = req.body.springUrl;
   res.send({
     status: "Spring URL changed successfully",
+  });
+});
+router.get("/clear-session", (req, res) => {
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    process.env.NODE_APP_REACT_ORIGIN
+  );
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  req.session["idSess"] = undefined;
+  res.send({
+    status: "Session updated",
   });
 });
 
