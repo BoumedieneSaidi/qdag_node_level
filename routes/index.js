@@ -423,6 +423,10 @@ router.get("/clear-session", (req, res) => {
     status: "Session updated",
   });
 });
-
+router.get("/new-version", (req, res) => {
+  res.send({
+    status: "Session updated",
+  });
+});
 /************************************************************************** */
 module.exports = router;
