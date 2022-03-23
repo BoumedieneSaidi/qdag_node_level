@@ -58,8 +58,10 @@ function initSessionVariables(req) {
     req.session["queriesSeries"] = new Map();
     //Les différente éxecutions de RDF-3X {Key:DB+Query => Value:Exec Time RDF-3x}
     req.session["rDF3XSeries"] = new Map();
+    req.session["virtuosoSeries"] = new Map();
     //Est-ce qu'on a éxecuté au moins une fois RDF-3X
     req.session["isRDFExecuted"] = false;
+    req.session["isVirtuosoExecuted"] = false;
   }
 }
 /********************************************************************/
@@ -113,6 +115,12 @@ function formatRDFXSeries(req) {
   map.forEach((execTime, serieId) => (formatedRDFXSeries[serieId] = execTime));
   return formatedRDFXSeries;
 }
+function formatVirtuosoSeries(req) {
+  let formatedVirtuosoSeries = {};
+  const map = new Map(Object.entries(req.session["virtuosoSeries"]));
+  map.forEach((execTime, serieId) => (formatedVirtuosoSeries[serieId] = execTime));
+  return formatedVirtuosoSeries
+}
 /**
  * userSession["queryParamsGroups"]] contient les différente configuration d'éxecution
  * @returns formatedQueryParamsGroups les différente configuration d'éxecution, si on a
@@ -120,6 +128,7 @@ function formatRDFXSeries(req) {
  */
 function formatQueryParamsGroups(req) {
   let formatedQueryParamsGroups = [...req.session["queryParamsGroups"]];
+  if (req.session["isVirtuosoExecuted"]) formatedQueryParamsGroups.push("Virtuoso");
   if (req.session["isRDFExecuted"]) formatedQueryParamsGroups.push("RDF-3X");
   return formatedQueryParamsGroups;
 }
@@ -207,6 +216,27 @@ async function executeRDF(queryParams, rdfToo, req) {
     }
   } catch (err) {}
 }
+async function executeVirtuoso(queryParams, virtuosoToo, req) {
+  try {
+    let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
+    if (
+      req.session["virtuosoSeries"][serieId] === undefined &&
+      virtuosoToo === "true"
+    ) {
+      const response = await fetch(
+        process.env.NODE_APP_API_URL +
+          "/run-virtuoso?db=" +
+          queryParams["currentDB"] +
+          "&query=" +
+          queryParams["queryName"]
+      );
+      let resp = await response.json();
+      console.log(resp);
+      req.session["isVirtuosoExecuted"] = true;
+      req.session["virtuosoSeries"][serieId] = parseInt(resp["virtuosoExecTime"]);
+    }
+  } catch (err) {}
+}
 /**
  * @param {*} queryParamsObj L'objet contenant l'ensemble des params d'éxécution
  * @param {*} paramsArr L'array des paramétres d'éxecution sollicité for the object
@@ -223,8 +253,9 @@ function fetchQuerySpecificParams(queryParamsObj, paramsArr) {
  * @param {*} rdfToo si l'utilisateurs veut comparer avec RDF-3X
  * @returns un objet comprenant toutes paramétres d'execution + ceux du résultat
  */
-async function runQuery(queryParams, rdfToo, sessionID, req) {
+async function runQuery(queryParams, rdfToo,virtuosoToo, sessionID, req) {
   try {
+    console.log("Virutoso toooo:",virtuosoToo)
     //L'id de la série => on peut dire l'id de la requete {DbName,queryName}
     let serieId = queryParams["currentDB"] + "," + queryParams["queryName"];
     const strQuery = fetchQuerySpecificParams(queryParams, [
@@ -243,8 +274,10 @@ async function runQuery(queryParams, rdfToo, sessionID, req) {
         lastExecutions.push(strQuery);
         await executeQDAG(queryParams, sessionID, req);
         await executeRDF(queryParams, rdfToo, req);
+        await executeVirtuoso(queryParams, virtuosoToo, req);
       } else {
         await executeRDF(queryParams, rdfToo, req);
+        await executeVirtuoso(queryParams, virtuosoToo, req);
         return formatQueriesSeries(req)[serieId][
           formatQueryGroup(queryParams, req)
         ];
@@ -255,7 +288,7 @@ async function runQuery(queryParams, rdfToo, sessionID, req) {
       if (Object.keys(respo).length === 0) return {};
       req.session["history"][serieId] = [strQuery];
     }
-
+    await executeVirtuoso(queryParams, virtuosoToo, req);
     await executeRDF(queryParams, rdfToo, req);
     return queryParams;
   } catch (err) {}
@@ -273,6 +306,7 @@ router.get("/demo", function (req, res, next) {
   res.send({
     queriesSeries: formatQueriesSeries(req),
     rDF3XSeries: formatRDFXSeries(req),
+    virtuosoSeries: formatVirtuosoSeries(req),
     queryParamsGroups: formatQueryParamsGroups(req),
     isRDFExecuted: req.session["isRDFExecuted"],
   });
@@ -328,15 +362,18 @@ router.get("/run-query", async function (req, res, next) {
     let executedQuery = await runQuery(
       queryParams,
       req.query["rdfToo"],
+      req.query["virtuosoToo"],
       req.session["idSess"],
       req
     );
     res.send({
       queriesSeries: formatQueriesSeries(req),
       rDF3XSeries: formatRDFXSeries(req),
+      virtuosoSeries: formatVirtuosoSeries(req),
       queryParamsGroups: formatQueryParamsGroups(req),
       currentQuery: executedQuery,
       isRDFExecuted: req.session["isRDFExecuted"],
+      isVirtuosoExecuted: req.session["isVirtuosoExecuted"],
     });
   } catch (err) {}
 });
