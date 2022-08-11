@@ -167,6 +167,7 @@ async function executeQDAG(queryParams, sessionID, req) {
       queryParams["optimizer"],
       queryParams["isElag"]
     );
+    console.log("ezzaaaaaaaaa:",response);
     if (Object.keys(response).length === 0) {
       return {};
     }
